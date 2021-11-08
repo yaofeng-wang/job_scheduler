@@ -7,13 +7,13 @@ if __name__ == "__main__":
     with open("client.pickle", "rb") as file:
         map_ts_begin = pickle.load(file)
     map_ts_begin = {k: float(v) for k, v in map_ts_begin.items()}
-    print(f"map_ts_begin: {map_ts_begin}")
+    # print(f"map_ts_begin: {map_ts_begin}\n")
 
     # read pickle of complete time
     with open("server.pickle", "rb") as file:
         map_ts_complete = pickle.load(file)
     map_ts_complete = {k: float(v) for k, v in map_ts_complete.items()}
-    print(f"map_ts_complete: {map_ts_complete}")
+    # print(f"map_ts_complete: {map_ts_complete}\n")
 
     # load filename and filesize
     map_filename_to_filesize = {}
@@ -25,7 +25,7 @@ if __name__ == "__main__":
                 ',')  # time, filename, filesize
             assert(len(parsed_line) == 3)
             map_filename_to_filesize[parsed_line[1]] = parsed_line[2]
-    print(f"map_filename_to_filesize: {map_filename_to_filesize}")
+    # print(f"map_filename_to_filesize: {map_filename_to_filesize}\n")
 
     # sanity check
     assert(set(map_ts_begin.keys()) == set(map_ts_complete.keys()))
@@ -35,8 +35,11 @@ if __name__ == "__main__":
     for filename in map_ts_begin.keys():
         list_tsdiff.append([map_filename_to_filesize[filename],
                                         round(2 * (map_ts_complete[filename] - map_ts_begin[filename]), 1)/2.0])
-    print(f"list_tsdiff: {list_tsdiff}")
-    plt.hist([v[1] for v in list_tsdiff])
-    plt.savefig('histogram.png')
+    # print(f"list_tsdiff: {list_tsdiff}\n")
 
-    print("\n\n*** Average completion time : {0:2.4f}".format(np.mean([v[1] for v in list_tsdiff])))
+    # plt.hist([v[1] for v in list_tsdiff])
+    # plt.savefig('histogram.png')
+    # print("\n\n*** Average completion time : {0:2.4f}".format(np.mean([v[1] for v in list_tsdiff])))
+    ts_list = [v[1] for v in list_tsdiff]
+    print("median: {0:2.4f}".format(np.median(ts_list)))
+    print("95th percentile: {0:2.4f}".format(np.percentile(ts_list, 95)))
