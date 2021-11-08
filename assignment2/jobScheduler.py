@@ -4,6 +4,32 @@ import sys
 import argparse
 import signal
 
+class serverQueue:
+
+    def __init__(self, servernames):
+        self.s = {name:0 for name in servernames}
+        self.l = {}
+
+    def getServer(self, filename):
+        minVal = float('inf')
+        minServer = None
+        for key in self.s.keys():
+            if self.s[key] < minVal:
+                minServer = key
+                minVal = self.s[key]
+        self.s[minServer] += 1
+        self.l[filename] = minServer
+        print(f"Sending {filename} to {minServer}.")
+        return minServer
+
+    def removeLoad(self, filename):
+        server = self.l[filename]
+        self.l.pop(filename)
+        self.s[server] -= 1
+
+
+
+
 # KeyboardInterrupt handler
 def sigint_handler(signal, frame):
     print('KeyboardInterrupt is caught. Close all sockets :)')
@@ -17,7 +43,6 @@ def sendPrintAll(serverSocket):
 def parseServernames(binaryServernames):
     return binaryServernames.decode().split(',')[:-1]
 
-
 # get the completed file's name, what you want to do?
 def getCompletedFilename(filename):
     ####################################################
@@ -29,15 +54,15 @@ def getCompletedFilename(filename):
     # server?                                          #
     ####################################################
 
-    # In this example. just print message
     print(f"[JobScheduler] Filename {filename} is finished.")
+    sq.removeLoad(filename)
 
 # formatting: to assign server to the request
 def scheduleJobToServer(servername, request):
     return (servername + "," + request + "\n").encode()
 
 # main part you need to do
-def assignServerToRequest(servernames, request):
+def assignServerToRequest(servernames, request, sq):
     ####################################################
     #                      TODO                        #
     # Given the list of servers, which server you want #
@@ -49,7 +74,7 @@ def assignServerToRequest(servernames, request):
     request_size = request.split(",")[1]
 
     # Example. just assign the first server
-    server_to_send = servernames[0]
+    server_to_send = sq.getServer(request_name)
 
     ####################################################
 
@@ -58,7 +83,7 @@ def assignServerToRequest(servernames, request):
     return scheduled_request
 
 
-def parseThenSendRequest(clientData, serverSocket, servernames):
+def parseThenSendRequest(clientData, serverSocket, servernames, sq):
     # print received requests
     print(f"[JobScheduler] Received binary messages:\n{clientData}")
     print(f"--------------------")
@@ -70,11 +95,11 @@ def parseThenSendRequest(clientData, serverSocket, servernames):
         if request[0] == "F":
             # if completed filenames, get the message with leading alphabet "F"
             filename = request.replace("F", "")
-            getCompletedFilename(filename)  
+            getCompletedFilename(filename)
         else:
             # if requests, add "servername" front of the pairs -> "servername, filename, jobsize"
             sendToServers = sendToServers + \
-                assignServerToRequest(servernames, request)  
+                assignServerToRequest(servernames, request, sq)
 
     # send "servername, filename, jobsize" pairs to servers
     if sendToServers != b"":
@@ -104,6 +129,8 @@ if __name__ == "__main__":
     servernames = parseServernames(binaryServernames)
     print(f"Servernames: {servernames}")
 
+    sq = serverQueue(servernames)
+
     currSeconds = -1
     now = datetime.now()
     while (True):
@@ -112,7 +139,7 @@ if __name__ == "__main__":
             completeFilenames = serverSocket.recv(4096)
             if completeFilenames != b"":
                 parseThenSendRequest(
-                    completeFilenames, serverSocket, servernames)
+                    completeFilenames, serverSocket, servernames, sq)
         except socket.timeout:
             # IMPORTANT: catch timeout exception, DO NOT REMOVE
             pass

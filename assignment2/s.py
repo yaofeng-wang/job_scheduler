@@ -6,7 +6,7 @@ import time
 import os
 from collections import defaultdict
 
-NUM_TESTCASES = 
+NUM_TESTCASES = 2
 CLIENT_PICKLE = "client.pickle"
 SERVER_PICKLE = "server.pickle"
 READ_BINARY_MODE = "rb"
@@ -48,10 +48,18 @@ def calcAverageStat(stat):
         avgTimings[k] = np.mean(stat[k])
     return avgTimings
 
-def printStat(avgTimings):
+def printStat(avgTimings, start):
+    end = time.time()
+    print(f"Total time taken for {NUM_TESTCASES} test: {end-start}s")
     keys = sorted(avgTimings.keys())
     for k in keys:
         print(f'{k}: {avgTimings[k]}')
+
+def removePickles(path_to_client_pickle, path_to_server_pickle):
+    if os.path.exists(path_to_client_pickle):
+        os.remove(path_to_client_pickle)
+    if os.path.exists(path_to_server_pickle):
+        os.remove(path_to_server_pickle)
 
 def startScheduler(tcDir, getNextPort, prob):
     print(f"***Start test in {tcDir}")
@@ -67,17 +75,21 @@ def startScheduler(tcDir, getNextPort, prob):
     scheduler.terminate()
     print(f"***End test in {tcDir}")
 
-
 if __name__ == "__main__":
     stat = defaultdict(list)
     getNextPort = portGenerator()
+    start = time.time()
     for prob in [0, 50, 100]:
         for tcIndex in range(NUM_TESTCASES):
             tcDir = f"/home/yfwang/assignment2/testcases/{tcIndex}"
+            path_to_client_pickle = os.path.join(tcDir, CLIENT_PICKLE)
+            path_to_server_pickle = os.path.join(tcDir, SERVER_PICKLE)
+            removePickles(path_to_client_pickle, path_to_server_pickle)
             startScheduler(tcDir, getNextPort, prob)
             list_tsdiff = processPickles(tcDir)
             p50, p95 = calcStat(list_tsdiff)
             stat[f'prob{prob}_p50s'].append(p50)
             stat[f'prob{prob}_p95s'].append(p95)
+            removePickles(path_to_client_pickle, path_to_server_pickle)
     avgTimings = calcAverageStat(stat)
-    printStat(avgTimings)
+    printStat(avgTimings, start)
