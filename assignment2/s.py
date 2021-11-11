@@ -1,18 +1,27 @@
 import subprocess
 import pickle
-import numpy as np
 import shlex
 import time
 import os
 from collections import defaultdict
+import statistics
+import math
 
-NUM_TESTCASES = 2
+NUM_TESTCASES = 8
 CLIENT_PICKLE = "client.pickle"
 SERVER_PICKLE = "server.pickle"
 READ_BINARY_MODE = "rb"
 
+def my_percentile(data, percentile):
+    n = len(data)
+    p = n * percentile / 100
+    if p.is_integer():
+        return sorted(data)[int(p)]
+    else:
+        return sorted(data)[int(math.ceil(p)) - 1]
+
 def portGenerator():
-    port = 12344
+    port = 13344
 
     def nextPort():
         nonlocal port
@@ -33,8 +42,8 @@ def calcJCTs(map_ts_begin, map_ts_complete):
     return list_tsdiff
 
 def calcStat(list_tsdiff):
-    p50 = np.median(list_tsdiff)
-    p95 = np.percentile(list_tsdiff, 95)
+    p50 = statistics.median(list_tsdiff)
+    p95 = my_percentile(list_tsdiff, 95)
     return p50, p95
 
 def processPickles(tcDir):
@@ -45,10 +54,11 @@ def processPickles(tcDir):
 def calcAverageStat(stat):
     avgTimings = dict()
     for k in stat.keys():
-        avgTimings[k] = np.mean(stat[k])
+        avgTimings[k] = statistics.mean(stat[k])
     return avgTimings
 
-def printStat(avgTimings, start):
+def printStat(avgTimings, start, stat):
+    print(stat)
     end = time.time()
     print(f"Total time taken for {NUM_TESTCASES} test: {end-start}s")
     keys = sorted(avgTimings.keys())
@@ -79,9 +89,10 @@ if __name__ == "__main__":
     stat = defaultdict(list)
     getNextPort = portGenerator()
     start = time.time()
-    for prob in [0, 50, 100]:
+    # for prob in [0, 50, 100]:
+    for prob in [100]:
         for tcIndex in range(NUM_TESTCASES):
-            tcDir = f"/home/yfwang/assignment2/testcases/{tcIndex}"
+            tcDir = f"/home/y/yaofengw/assignment2/testcases/{tcIndex}"
             path_to_client_pickle = os.path.join(tcDir, CLIENT_PICKLE)
             path_to_server_pickle = os.path.join(tcDir, SERVER_PICKLE)
             removePickles(path_to_client_pickle, path_to_server_pickle)
@@ -92,4 +103,4 @@ if __name__ == "__main__":
             stat[f'prob{prob}_p95s'].append(p95)
             removePickles(path_to_client_pickle, path_to_server_pickle)
     avgTimings = calcAverageStat(stat)
-    printStat(avgTimings, start)
+    printStat(avgTimings, start, stat)
