@@ -12,7 +12,7 @@ NUM_TESTCASES = 8
 CLIENT_PICKLE = "client.pickle"
 SERVER_PICKLE = "server.pickle"
 READ_BINARY_MODE = "rb"
-
+MUTE = False
 def my_percentile(data, percentile):
     n = len(data)
     p = n * percentile / 100
@@ -22,7 +22,7 @@ def my_percentile(data, percentile):
         return sorted(data)[int(math.ceil(p)) - 1]
 
 def portGenerator():
-    port = 13414
+    port = 12944
 
     def nextPort():
         nonlocal port
@@ -74,14 +74,19 @@ def removePickles(path_to_client_pickle, path_to_server_pickle):
         os.remove(path_to_server_pickle)
 
 def startScheduler(tcDir, getNextPort, prob):
-    print(f"***Start test in {tcDir}")
+    print(f"***Start test in {tcDir}, prob={prob}")
     port = getNextPort()
     print(f"Using port: {port}")
     command = f"./server_client -port {port} -prob {prob}"
     sc = subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, cwd=tcDir)
     time.sleep(2)
+
     command = f"/usr/bin/python3 jobScheduler.py -port {port}"
-    scheduler = subprocess.Popen(shlex.split(command), stdout=subprocess.DEVNULL)
+    if MUTE:
+        scheduler = subprocess.Popen(shlex.split(command), stdout=subprocess.DEVNULL)
+    else:
+        scheduler = subprocess.Popen(shlex.split(command))
+
     while sc.poll() is None:
         time.sleep(2)
     scheduler.terminate()
@@ -92,15 +97,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--t', dest="tci", type=int, help='testcase index')
     parser.add_argument('--p', dest="prob", type=int, help='probability')
+    parser.add_argument('--m', dest="mute", action='store_true', help='mute')
     args = parser.parse_args()
 
     stat = defaultdict(list)
     getNextPort = portGenerator()
     start = time.time()
 
+    MUTE = args.mute
     tcIndex = args.tci
     prob = args.prob
-    if tcIndex is not None:
+    if tcIndex is not None and prob is not None:
         tcDir = f"/home/y/yaofengw/assignment2/testcases/{tcIndex}"
         path_to_client_pickle = os.path.join(tcDir, CLIENT_PICKLE)
         path_to_server_pickle = os.path.join(tcDir, SERVER_PICKLE)
@@ -113,8 +120,22 @@ if __name__ == "__main__":
         removePickles(path_to_client_pickle, path_to_server_pickle)
         avgTimings = calcAverageStat(stat)
         printStat(avgTimings, start, stat)
+    elif prob is not None:
+        for tcIndex in range(NUM_TESTCASES):
+            tcDir = f"/home/y/yaofengw/assignment2/testcases/{tcIndex}"
+            path_to_client_pickle = os.path.join(tcDir, CLIENT_PICKLE)
+            path_to_server_pickle = os.path.join(tcDir, SERVER_PICKLE)
+            removePickles(path_to_client_pickle, path_to_server_pickle)
+            startScheduler(tcDir, getNextPort, prob)
+            list_tsdiff = processPickles(tcDir)
+            p50, p95 = calcStat(list_tsdiff)
+            stat[f'prob{str(prob).zfill(3)}_p50s'].append(p50)
+            stat[f'prob{str(prob).zfill(3)}_p95s'].append(p95)
+            removePickles(path_to_client_pickle, path_to_server_pickle)
+        avgTimings = calcAverageStat(stat)
+        printStat(avgTimings, start, stat)
     else:
-        for prob in [0]:
+        for prob in [0, 50, 100]:
             for tcIndex in range(NUM_TESTCASES):
                 tcDir = f"/home/y/yaofengw/assignment2/testcases/{tcIndex}"
                 path_to_client_pickle = os.path.join(tcDir, CLIENT_PICKLE)
