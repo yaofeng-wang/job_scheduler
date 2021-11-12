@@ -7,7 +7,7 @@ from collections import defaultdict
 import statistics
 import math
 
-NUM_TESTCASES = 8
+NUM_TESTCASES = 1
 CLIENT_PICKLE = "client.pickle"
 SERVER_PICKLE = "server.pickle"
 READ_BINARY_MODE = "rb"
@@ -21,7 +21,7 @@ def my_percentile(data, percentile):
         return sorted(data)[int(math.ceil(p)) - 1]
 
 def portGenerator():
-    port = 13344
+    port = 12344
 
     def nextPort():
         nonlocal port
@@ -58,7 +58,8 @@ def calcAverageStat(stat):
     return avgTimings
 
 def printStat(avgTimings, start, stat):
-    print(stat)
+    for k, v in stat.items():
+        print(f"{k}:{v}")
     end = time.time()
     print(f"Total time taken for {NUM_TESTCASES} test: {end-start}s")
     keys = sorted(avgTimings.keys())
@@ -75,8 +76,8 @@ def startScheduler(tcDir, getNextPort, prob):
     print(f"***Start test in {tcDir}")
     port = getNextPort()
     print(f"Using port: {port}")
-    command = f"cd {tcDir}; ./server_client -port {port} -prob {prob}"
-    sc = subprocess.Popen(command, shell=True)
+    command = f"./server_client -port {port} -prob {prob}"
+    sc = subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, cwd=tcDir)
     time.sleep(2)
     command = f"/usr/bin/python3 jobScheduler.py -port {port}"
     scheduler = subprocess.Popen(shlex.split(command))
@@ -89,18 +90,25 @@ if __name__ == "__main__":
     stat = defaultdict(list)
     getNextPort = portGenerator()
     start = time.time()
-    # for prob in [0, 50, 100]:
-    for prob in [100]:
-        for tcIndex in range(NUM_TESTCASES):
-            tcDir = f"/home/y/yaofengw/assignment2/testcases/{tcIndex}"
-            path_to_client_pickle = os.path.join(tcDir, CLIENT_PICKLE)
-            path_to_server_pickle = os.path.join(tcDir, SERVER_PICKLE)
-            removePickles(path_to_client_pickle, path_to_server_pickle)
-            startScheduler(tcDir, getNextPort, prob)
-            list_tsdiff = processPickles(tcDir)
-            p50, p95 = calcStat(list_tsdiff)
-            stat[f'prob{prob}_p50s'].append(p50)
-            stat[f'prob{prob}_p95s'].append(p95)
-            removePickles(path_to_client_pickle, path_to_server_pickle)
-    avgTimings = calcAverageStat(stat)
-    printStat(avgTimings, start, stat)
+    retry = True
+    while retry:
+        try:
+            for prob in [50]:
+                for tcIndex in range(NUM_TESTCASES):
+
+                    tcDir = f"/home/y/yaofengw/assignment2/testcases/{tcIndex}"
+                    path_to_client_pickle = os.path.join(tcDir, CLIENT_PICKLE)
+                    path_to_server_pickle = os.path.join(tcDir, SERVER_PICKLE)
+                    removePickles(path_to_client_pickle, path_to_server_pickle)
+                    startScheduler(tcDir, getNextPort, prob)
+                    list_tsdiff = processPickles(tcDir)
+                    p50, p95 = calcStat(list_tsdiff)
+                    stat[f'prob{prob}_p50s'].append(p50)
+                    stat[f'prob{prob}_p95s'].append(p95)
+                    removePickles(path_to_client_pickle, path_to_server_pickle)
+            avgTimings = calcAverageStat(stat)
+            printStat(avgTimings, start, stat)
+            retry = False
+        except OSError as e:
+            print(e)
+            retry = True

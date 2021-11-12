@@ -5,8 +5,6 @@ import argparse
 import signal
 import time
 
-serverSocket = None
-
 JOBS = "JOBS"
 LAST_UPDATE_TIME = "LAST_UPDATE_TIME"
 NUM_ACTIVE_JOBS = "NUM_ACTIVE_JOBS"
@@ -55,28 +53,44 @@ class serverQueue:
         return server
 
 
-    def _updateServerDetails(self, server, jobName, jobSize):
+    def _isUnknownJobSize(self, jobSize):
+        return jobSize == '-1' or jobSize == -1.0
+
+
+    def _updateNBPAJ(self, server):
+        divisor = max(1, self.serverDetails[server][NUM_ACTIVE_JOBS])
+        dividend = - self.serverDetails[server][BANDWIDTH]
+        self.serverDetails[server][NBPAJ] = round(dividend / divisor, 3)
+
+
+    def _updateServerDetail(self, server, jobName, jobSize):
         serverDetail = self.serverDetails[server]
         now = datetime.now()
         bw = serverDetail[BANDWIDTH]
 
         serverDetail[NUM_ACTIVE_JOBS] += 1
         serverDetail[NUM_ASSIGNED_JOBS] += 1
+
         if bw:
-            serverDetail[NBPAJ] = round(- bw / serverDetail[NUM_ACTIVE_JOBS], 3)
-            return
+            return self._updateNBPAJ(server)
 
         lut = serverDetail[LAST_UPDATE_TIME]
         e = ((now - lut) / timedelta(microseconds=1))
         for job in serverDetail[JOBS].keys():
             serverDetail[JOBS][job] += (e / (serverDetail[NUM_ACTIVE_JOBS] - 1))
-        serverDetail[JOBS][jobName] = 0
+
+        if not self._isUnknownJobSize(jobSize):
+            serverDetail[JOBS][jobName] = 0
+
         serverDetail[LAST_UPDATE_TIME] = now
 
 
-    def _updateJobDetails(self, server, jobName, jobSize):
-        bw = self.serverDetails[server][BANDWIDTH]
+    def _addJobDetail(self, server: str, jobName: str, jobSize: str) -> None:
         self.jobDetails[jobName] = [server, float(jobSize)]
+
+
+    def _updateJobDetails(self, server: str, jobName: str, jobSize: str) -> None:
+        self._addJobDetail(server, jobName, jobSize)
 
 
     def _printServerDetails(self):
@@ -100,42 +114,45 @@ class serverQueue:
         abk = self.allBandwidthsKnown
         attribute = NBPAJ if abk else NUM_ACTIVE_JOBS
         server = self._findServerWithLeast(attribute)
-        self._updateServerDetails(server, fileName, jobSize)
+        self._updateServerDetail(server, fileName, jobSize)
         self._updateJobDetails(server, fileName, jobSize)
+        return server
 
+
+    def printServerStatus(self):
         self._printServerDetails()
         self._printJobDetails()
-        return server
 
 
     def removeJob(self, fileName):
         server, jobSize = self.jobDetails.pop(fileName)
         serverDetail = self.serverDetails[server]
         serverDetail[NUM_ACTIVE_JOBS] -= 1
+
         bw = serverDetail[BANDWIDTH]
         if bw:
-            serverDetail[NBPAJ] = - serverDetail[BANDWIDTH] if serverDetail[NUM_ACTIVE_JOBS] == 0 else round(- serverDetail[BANDWIDTH] / serverDetail[NUM_ACTIVE_JOBS], 3)
-
-            self._printServerDetails()
-            self._printJobDetails()
+            self._updateNBPAJ(server)
             return
+
         lut = serverDetail[LAST_UPDATE_TIME]
         now = datetime.now()
+        e = ((now - lut) / timedelta(microseconds=1))
+
+        if self._isUnknownJobSize(jobSize):
+            for job in serverDetail[JOBS].keys():
+                serverDetail[JOBS][job] += (e / (serverDetail[NUM_ACTIVE_JOBS] + 1))
+            return
 
         timeGiven = serverDetail[JOBS][fileName]
-        e = ((now - lut) / timedelta(microseconds=1))
         timeGiven += e / (serverDetail[NUM_ACTIVE_JOBS] + 1)
 
         serverDetail[BANDWIDTH] = round(jobSize / (timeGiven / 1_000_000), 3)
-        serverDetail[NBPAJ] = - serverDetail[BANDWIDTH] if serverDetail[NUM_ACTIVE_JOBS] == 0 else round(- serverDetail[BANDWIDTH] / serverDetail[NUM_ACTIVE_JOBS], 3)
+        self._updateNBPAJ(server)
 
         serverDetail.pop(JOBS)
         serverDetail.pop(LAST_UPDATE_TIME)
 
         self.allBandwidthsKnown = all(v[BANDWIDTH] for k, v in self.serverDetails.items())
-
-        self._printServerDetails()
-        self._printJobDetails()
 
 # KeyboardInterrupt handler
 def sigint_handler(signal, frame):
@@ -190,11 +207,11 @@ def assignServerToRequest(servernames, request, sq):
 
 def parseThenSendRequest(clientData, serverSocket, servernames, sq):
     # print received requests
-    print(f"[JobScheduler] Received binary messages:\n{clientData}")
-    print(f"--------------------")
+    print(f"*******************")
+    print(f"[JobScheduler] Received binary messages:\n{clientData}\n")
+
     # parsing to "filename, jobsize" pairs
     requests = clientData.decode().split("\n")[:-1]
-
     sendToServers = b""
     for request in requests:
         if request[0] == "F":
@@ -210,6 +227,8 @@ def parseThenSendRequest(clientData, serverSocket, servernames, sq):
     if sendToServers != b"":
         serverSocket.send(sendToServers)
 
+    sq.printServerStatus()
+    print(f"--------------------")
 
 if __name__ == "__main__":
     # catch the KeyboardInterrupt error in Python
