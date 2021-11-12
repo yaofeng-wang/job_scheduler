@@ -9,14 +9,16 @@ from typing import Tuple
 JOBS = "JOBS"
 LAST_UPDATE_TIME = "LAST_UPDATE_TIME"
 NUM_ACTIVE_JOBS = "NUM_ACTIVE_JOBS"
+ACTIVE_LOAD = "ACTIVE_LOAD"
 BANDWIDTH = "BANDWIDTH"
 P = "Priority"
 NUM_ASSIGNED_JOBS = "NUM_ASSIGNED_JOBS"
+ASSIGNED_LOAD = "ASSIGNED_LOAD"
 DEFAULT_BANDWIDTH = 50.0
 ESTIMATING_BW = "ESTIMATING_BW"
-P_ZERO_CONNECTION = 10.0
 MODE_DECREASE = "MODE_DECREASE"
 MODE_INCREASE = "MODE_INCREASE"
+DEFAULT_LOAD = 200.0
 
 class serverQueue:
 
@@ -28,7 +30,9 @@ class serverQueue:
             BANDWIDTH: DEFAULT_BANDWIDTH,
             P: 0,
             NUM_ASSIGNED_JOBS: 0,
-            ESTIMATING_BW: True
+            ESTIMATING_BW: True,
+            ACTIVE_LOAD: 0,
+            ASSIGNED_LOAD: 0,
             } for name in servernames}
 
         self._updatePs()
@@ -57,32 +61,34 @@ class serverQueue:
 
 
     def _updatePs(self):
-        numFinishedJobs = 0
+        finishedLoad = 0
         for server in self.serverDetails.keys():
-            numFinishedJobs += self.serverDetails[server][NUM_ASSIGNED_JOBS] - self.serverDetails[server][NUM_ACTIVE_JOBS]
+            finishedLoad += self.serverDetails[server][ASSIGNED_LOAD] - self.serverDetails[server][ACTIVE_LOAD]
 
         for server in self.serverDetails.keys():
-            divisor = max(1, self.serverDetails[server][NUM_ACTIVE_JOBS])
+            divisor = max(1, self.serverDetails[server][ACTIVE_LOAD])
             dividend = self.serverDetails[server][BANDWIDTH]
-            if self.serverDetails[server][NUM_ACTIVE_JOBS] == 0:
-                dividend += P_ZERO_CONNECTION
             self.serverDetails[server][P] = round(dividend / divisor, 3)
-            if numFinishedJobs >= 20:
-                numFinishedJobsForServer = self.serverDetails[server][NUM_ASSIGNED_JOBS] - self.serverDetails[server][NUM_ACTIVE_JOBS]
-                self.serverDetails[server][P] *= (numFinishedJobsForServer + 0.1) / numFinishedJobs
+            if finishedLoad >= 1000:
+                finishedLoadForServer = self.serverDetails[server][ASSIGNED_LOAD] - self.serverDetails[server][ACTIVE_LOAD]
+                self.serverDetails[server][P] *= (finishedLoadForServer + 0.1) / finishedLoad
 
 
     def _addJobToServerDetails(self, server, jobName, jobSize):
         serverDetail = self.serverDetails[server]
-
+        load = DEFAULT_LOAD if self._isUnknownJobSize(jobSize) else float(jobSize)
         if not serverDetail[ESTIMATING_BW]:
             _ = self._updateNumActiveJobs(server, MODE_INCREASE)
             _ = self._updateNumAssignedJobs(server, MODE_INCREASE)
+            self._updateActiveLoad(server, MODE_INCREASE, load)
+            self._updateAssignedLoad(server, MODE_INCREASE, load)
             self._updatePs()
             return
         else:
             prevNumActiveJobs = self._updateNumActiveJobs(server, MODE_INCREASE)
             _ = self._updateNumAssignedJobs(server, MODE_INCREASE)
+            self._updateActiveLoad(server, MODE_INCREASE, load)
+            self._updateAssignedLoad(server, MODE_INCREASE, load)
             self._updatePs()
             self._updateJOBS(server, prevNumActiveJobs)
             if not self._isUnknownJobSize(jobSize):
@@ -90,17 +96,21 @@ class serverQueue:
 
 
     def _removeJobFromServerDetails(self, server, jobName, jobSize):
+        load = DEFAULT_LOAD if self._isUnknownJobSize(jobSize) else float(jobSize)
         if not self.serverDetails[server][ESTIMATING_BW]: # already know true BW
             _ = self._updateNumActiveJobs(server, MODE_DECREASE)
+            self._updateActiveLoad(server, MODE_DECREASE, load)
             self._updatePs()
             return
         elif self._isUnknownJobSize(jobSize):
             prevNumActiveJobs = self._updateNumActiveJobs(server, MODE_DECREASE)
+            self._updateActiveLoad(server, MODE_DECREASE, load)
             self._updateJOBS(server, prevNumActiveJobs)
             self._updatePs()
             return
         else: # probe job
             prevNumActiveJobs = self._updateNumActiveJobs(server, MODE_DECREASE)
+            self._updateActiveLoad(server, MODE_DECREASE, load)
             self._updateJOBS(server, prevNumActiveJobs)
             self._updateBANDWIDTH(server, jobName, jobSize)
             self._updatePs()
@@ -144,6 +154,22 @@ class serverQueue:
     def _updateBANDWIDTH(self, server, jobName, jobSize):
         serverDetail = self.serverDetails[server]
         serverDetail[BANDWIDTH] = round(jobSize / (serverDetail[JOBS][jobName] / 1_000_000), 3)
+
+
+    def _updateActiveLoad(self, server, mode, load):
+        serverDetail = self.serverDetails[server]
+        if mode == MODE_DECREASE:
+            serverDetail[ACTIVE_LOAD] -= load
+        elif mode == MODE_INCREASE:
+            serverDetail[ACTIVE_LOAD] += load
+
+
+    def _updateAssignedLoad(self, server, mode, load):
+        serverDetail = self.serverDetails[server]
+        if mode == MODE_DECREASE:
+            serverDetail[ASSIGNED_LOAD] -= load
+        elif mode == MODE_INCREASE:
+            serverDetail[ASSIGNED_LOAD] += load
 
 
     def _updateNumAssignedJobs(self, server, mode):
