@@ -10,36 +10,28 @@ JOBS = "JOBS"
 LAST_UPDATE_TIME = "LAST_UPDATE_TIME"
 NUM_ACTIVE_JOBS = "NUM_ACTIVE_JOBS"
 BANDWIDTH = "BANDWIDTH"
-NBPAJ = "NBPAJ"
+P = "Priority"
 NUM_ASSIGNED_JOBS = "NUM_ASSIGNED_JOBS"
 DEFAULT_BANDWIDTH = 50.0
 ESTIMATING_BW = "ESTIMATING_BW"
-NPBJ_BONUS_ZERO_CONNECTION = -10.0
+P_ZERO_CONNECTION = 10.0
 MODE_DECREASE = "MODE_DECREASE"
 MODE_INCREASE = "MODE_INCREASE"
 
 class serverQueue:
 
     def __init__(self, servernames, startTime):
-        """
-        contains details for each server:
-        - JOBS([]): stores information for all jobs with known sizes
-        that were allocated to the server. For each job, stores
-         bandwidth allocation (as a proportion of bandwidth).
-        - LAST_UPDATE_TIME(startTime): time since last update.
-        - NUM_ACTIVE_JOBS(0): number of active jobs in server.
-        - BANDWIDTH(None): effective bandwidth for each job.
-        - NBPAJ(0): negative bandwidth per active job
-        """
         self.serverDetails = {name: {
             JOBS: dict(),
             LAST_UPDATE_TIME: startTime,
             NUM_ACTIVE_JOBS: 0,
             BANDWIDTH: DEFAULT_BANDWIDTH,
-            NBPAJ: - DEFAULT_BANDWIDTH + NPBJ_BONUS_ZERO_CONNECTION,
+            P: 0,
             NUM_ASSIGNED_JOBS: 0,
             ESTIMATING_BW: True
             } for name in servernames}
+
+        self._updatePs()
 
         # maps each job with known size to the servername with
         # unkown job size that it was allocated to and its size
@@ -48,15 +40,15 @@ class serverQueue:
         self.allBandwidthsKnown = False
 
 
-    def _findServerWithLeast(self, attribute):
+    def _findServerWithMost(self, attribute):
         serverDetail = self.serverDetails
-        leastVal = float('inf')
+        maxVal = 0
         server = None
 
         for key in serverDetail.keys():
-            if serverDetail[key][attribute] < leastVal:
+            if serverDetail[key][attribute] > maxVal:
                 server = key
-                leastVal = serverDetail[key][attribute]
+                maxVal = serverDetail[key][attribute]
         return server
 
 
@@ -64,12 +56,20 @@ class serverQueue:
         return jobSize == '-1' or jobSize == -1.0
 
 
-    def _updateNBPAJ(self, server):
-        divisor = max(1, self.serverDetails[server][NUM_ACTIVE_JOBS])
-        dividend = - self.serverDetails[server][BANDWIDTH]
-        if self.serverDetails[server][NUM_ACTIVE_JOBS] == 0:
-            dividend += NPBJ_BONUS_ZERO_CONNECTION
-        self.serverDetails[server][NBPAJ] = round(dividend / divisor, 3)
+    def _updatePs(self):
+        numFinishedJobs = 0
+        for server in self.serverDetails.keys():
+            numFinishedJobs += self.serverDetails[server][NUM_ASSIGNED_JOBS] - self.serverDetails[server][NUM_ACTIVE_JOBS]
+
+        for server in self.serverDetails.keys():
+            divisor = max(1, self.serverDetails[server][NUM_ACTIVE_JOBS])
+            dividend = self.serverDetails[server][BANDWIDTH]
+            if self.serverDetails[server][NUM_ACTIVE_JOBS] == 0:
+                dividend += P_ZERO_CONNECTION
+            self.serverDetails[server][P] = round(dividend / divisor, 3)
+            if numFinishedJobs >= 20:
+                numFinishedJobsForServer = self.serverDetails[server][NUM_ASSIGNED_JOBS] - self.serverDetails[server][NUM_ACTIVE_JOBS]
+                self.serverDetails[server][P] *= (numFinishedJobsForServer + 0.1) / numFinishedJobs
 
 
     def _addJobToServerDetails(self, server, jobName, jobSize):
@@ -78,12 +78,12 @@ class serverQueue:
         if not serverDetail[ESTIMATING_BW]:
             _ = self._updateNumActiveJobs(server, MODE_INCREASE)
             _ = self._updateNumAssignedJobs(server, MODE_INCREASE)
-            self._updateNBPAJ(server)
+            self._updatePs()
             return
         else:
             prevNumActiveJobs = self._updateNumActiveJobs(server, MODE_INCREASE)
             _ = self._updateNumAssignedJobs(server, MODE_INCREASE)
-            self._updateNBPAJ(server)
+            self._updatePs()
             self._updateJOBS(server, prevNumActiveJobs)
             if not self._isUnknownJobSize(jobSize):
                 serverDetail[JOBS][jobName] = 0
@@ -92,18 +92,18 @@ class serverQueue:
     def _removeJobFromServerDetails(self, server, jobName, jobSize):
         if not self.serverDetails[server][ESTIMATING_BW]: # already know true BW
             _ = self._updateNumActiveJobs(server, MODE_DECREASE)
-            self._updateNBPAJ(server)
+            self._updatePs()
             return
         elif self._isUnknownJobSize(jobSize):
             prevNumActiveJobs = self._updateNumActiveJobs(server, MODE_DECREASE)
             self._updateJOBS(server, prevNumActiveJobs)
-            self._updateNBPAJ(server)
+            self._updatePs()
             return
         else: # probe job
             prevNumActiveJobs = self._updateNumActiveJobs(server, MODE_DECREASE)
             self._updateJOBS(server, prevNumActiveJobs)
             self._updateBANDWIDTH(server, jobName, jobSize)
-            self._updateNBPAJ(server)
+            self._updatePs()
             self._serverStopEstimatingBW(server)
 
 
@@ -167,7 +167,7 @@ class serverQueue:
 
 
     def getServer(self, jobName, jobSize):
-        server = self._findServerWithLeast(NBPAJ)
+        server = self._findServerWithMost(P)
         self._addJobToServerDetails(server, jobName, jobSize)
         self._addJobToJobDetails(server, jobName, jobSize)
         return server
