@@ -6,42 +6,41 @@ import signal
 import time
 from typing import Tuple
 
-JOBS = "JOBS"
-LAST_UPDATE_TIME = "LAST_UPDATE_TIME"
-NUM_ACTIVE_JOBS = "NUM_ACTIVE_JOBS"
-ACTIVE_LOAD = "ACTIVE_LOAD"
-BANDWIDTH = "BANDWIDTH"
+J = "Jobs"
+LUT = "Last Update Time"
+NACJ = "Num Active Jobs"
+ACL = "Active Load"
+B = "Bandwidth"
 P = "Priority"
-NUM_ASSIGNED_JOBS = "NUM_ASSIGNED_JOBS"
-ASSIGNED_LOAD = "ASSIGNED_LOAD"
-DEFAULT_BANDWIDTH = 50.0
-ESTIMATING_BW = "ESTIMATING_BW"
-MODE_DECREASE = "MODE_DECREASE"
-MODE_INCREASE = "MODE_INCREASE"
-DEFAULT_LOAD = 200.0
+NASJ = "Num Assigned Jobs"
+ASL = "Assigned Load"
+DB = 50.0  # Default Bandwidth
+EB = "Estimating Bandwidth"
+FF = "Force Fed"
+
+MODE_D = "MODE_DECREASE"
+MODE_I = "MODE_INCREASE"
 
 class serverQueue:
 
     def __init__(self, servernames, startTime):
         self.serverDetails = {name: {
-            JOBS: dict(),
-            LAST_UPDATE_TIME: startTime,
-            NUM_ACTIVE_JOBS: 0,
-            BANDWIDTH: DEFAULT_BANDWIDTH,
+            J: dict(),
+            LUT: startTime,
+            NACJ: 0,
+            B: DB,
             P: 0,
-            NUM_ASSIGNED_JOBS: 0,
-            ESTIMATING_BW: True,
-            ACTIVE_LOAD: 0,
-            ASSIGNED_LOAD: 0,
+            NASJ: 0,
+            EB: 0,
+            ACL: 0,
+            ASL: 0,
+            FF: 0,
             } for name in servernames}
-
-        self._updatePs()
-
-        # maps each job with known size to the servername with
-        # unkown job size that it was allocated to and its size
         self.jobDetails = {}
-
-        self.allBandwidthsKnown = False
+        self.numForceFed = 0
+        self.TFL = 0 # Total Finished Load
+        self.DL = 200.0  # Default Load
+        self._updatePs()
 
 
     def _findServerWithMost(self, attribute):
@@ -61,67 +60,68 @@ class serverQueue:
 
 
     def _updatePs(self):
-        finishedLoad = 0
         for server in self.serverDetails.keys():
-            finishedLoad += self.serverDetails[server][ASSIGNED_LOAD] - self.serverDetails[server][ACTIVE_LOAD]
-
-        for server in self.serverDetails.keys():
-            divisor = max(1, self.serverDetails[server][ACTIVE_LOAD])
-            dividend = self.serverDetails[server][BANDWIDTH]
-            self.serverDetails[server][P] = round(dividend / divisor, 3)
-            if finishedLoad >= 1000:
-                finishedLoadForServer = self.serverDetails[server][ASSIGNED_LOAD] - self.serverDetails[server][ACTIVE_LOAD]
-                self.serverDetails[server][P] *= (finishedLoadForServer + 0.1) / finishedLoad
+            divisor = max(1, self.serverDetails[server][ACL])
+            dividend = self.serverDetails[server][B]
+            self.serverDetails[server][P] = dividend / divisor
+            if self.TFL >= 1000:
+                finishedLoadForServer = self.serverDetails[server][ASL] - self.serverDetails[server][ACL]
+                self.serverDetails[server][P] *= (finishedLoadForServer + 0.1) / self.TFL
 
 
     def _addJobToServerDetails(self, server, jobName, jobSize):
         serverDetail = self.serverDetails[server]
-        load = DEFAULT_LOAD if self._isUnknownJobSize(jobSize) else float(jobSize)
-        if not serverDetail[ESTIMATING_BW]:
-            _ = self._updateNumActiveJobs(server, MODE_INCREASE)
-            _ = self._updateNumAssignedJobs(server, MODE_INCREASE)
-            self._updateActiveLoad(server, MODE_INCREASE, load)
-            self._updateAssignedLoad(server, MODE_INCREASE, load)
+        load = self.DL if self._isUnknownJobSize(jobSize) else float(jobSize)
+        if EB not in serverDetail:
+            _ = self._updateNACJ(server, MODE_I)
+            _ = self._updateNASJ(server, MODE_I)
+            self._updateACL(server, MODE_I, load)
+            self._updateASL(server, MODE_I, load)
             self._updatePs()
             return
         else:
-            prevNumActiveJobs = self._updateNumActiveJobs(server, MODE_INCREASE)
-            _ = self._updateNumAssignedJobs(server, MODE_INCREASE)
-            self._updateActiveLoad(server, MODE_INCREASE, load)
-            self._updateAssignedLoad(server, MODE_INCREASE, load)
+            prevNACJ = self._updateNACJ(server, MODE_I)
+            _ = self._updateNASJ(server, MODE_I)
+            self._updateACL(server, MODE_I, load)
+            self._updateASL(server, MODE_I, load)
             self._updatePs()
-            self._updateJOBS(server, prevNumActiveJobs)
+            self._updateJ(server, prevNACJ)
             if not self._isUnknownJobSize(jobSize):
-                serverDetail[JOBS][jobName] = 0
+                serverDetail[J][jobName] = 0
 
 
     def _removeJobFromServerDetails(self, server, jobName, jobSize):
-        load = DEFAULT_LOAD if self._isUnknownJobSize(jobSize) else float(jobSize)
-        if not self.serverDetails[server][ESTIMATING_BW]: # already know true BW
-            _ = self._updateNumActiveJobs(server, MODE_DECREASE)
-            self._updateActiveLoad(server, MODE_DECREASE, load)
+        load = self.DL if self._isUnknownJobSize(jobSize) else float(jobSize)
+        if EB not in self.serverDetails[server]: # already know true BW
+            _ = self._updateNACJ(server, MODE_D)
+            self._updateACL(server, MODE_D, load)
             self._updatePs()
-            return
         elif self._isUnknownJobSize(jobSize):
-            prevNumActiveJobs = self._updateNumActiveJobs(server, MODE_DECREASE)
-            self._updateActiveLoad(server, MODE_DECREASE, load)
-            self._updateJOBS(server, prevNumActiveJobs)
+            prevNACJ = self._updateNACJ(server, MODE_D)
+            self._updateACL(server, MODE_D, load)
+            self._updateJ(server, prevNACJ)
             self._updatePs()
-            return
         else: # probe job
-            prevNumActiveJobs = self._updateNumActiveJobs(server, MODE_DECREASE)
-            self._updateActiveLoad(server, MODE_DECREASE, load)
-            self._updateJOBS(server, prevNumActiveJobs)
-            self._updateBANDWIDTH(server, jobName, jobSize)
+            prevNACJ = self._updateNACJ(server, MODE_D)
+            self._updateACL(server, MODE_D, load)
+            self._updateJ(server, prevNACJ)
+            self._updateB(server, jobName, jobSize)
             self._updatePs()
-            self._serverStopEstimatingBW(server)
+            self._serverStopEB(server)
+
+
+    def _increaseTFL(self, jobSize):
+        load = self.DL if self._isUnknownJobSize(jobSize) else float(jobSize)
+        self.TFL += load
 
 
     def _addJobToJobDetails(self, server: str, jobName: str, jobSize: str) -> None:
         self.jobDetails[jobName] = [server, float(jobSize)]
 
+
     def _removeJobFromJobDetails(self, jobName: str) -> Tuple[str, float]:
          return self.jobDetails.pop(jobName)
+
 
     def _printServerDetails(self):
         for k,v in self.serverDetails.items():
@@ -133,70 +133,76 @@ class serverQueue:
             print(f"{k}:{v}")
 
 
-    def _serverStopEstimatingBW(self, server):
+    def _serverStopEB(self, server):
         serverDetail = self.serverDetails[server]
-        serverDetail.pop(JOBS)
-        serverDetail.pop(LAST_UPDATE_TIME)
-        serverDetail[ESTIMATING_BW] = False
+        serverDetail.pop(J)
+        serverDetail.pop(LUT)
+        serverDetail.pop(EB)
 
 
-    def _updateJOBS(self, server, prevNumActiveJobs):
+    def _updateJ(self, server, prevNACJ):
         serverDetail = self.serverDetails[server]
-        lut = serverDetail[LAST_UPDATE_TIME]
+        lut = serverDetail[LUT]
         now = datetime.now()
         e = ((now - lut) / timedelta(microseconds=1))
 
-        for job in serverDetail[JOBS].keys():
-            serverDetail[JOBS][job] += e / prevNumActiveJobs
-        serverDetail[LAST_UPDATE_TIME] = now
+        for job in serverDetail[J].keys():
+            serverDetail[J][job] += e / prevNACJ
+        serverDetail[LUT] = now
 
 
-    def _updateBANDWIDTH(self, server, jobName, jobSize):
+    def _updateB(self, server, jobName, jobSize):
         serverDetail = self.serverDetails[server]
-        serverDetail[BANDWIDTH] = round(jobSize / (serverDetail[JOBS][jobName] / 1_000_000), 3)
+        serverDetail[B] = round(jobSize / (serverDetail[J][jobName] / 1_000_000), 3)
 
 
-    def _updateActiveLoad(self, server, mode, load):
+    def _updateACL(self, server, mode, load):
         serverDetail = self.serverDetails[server]
-        if mode == MODE_DECREASE:
-            serverDetail[ACTIVE_LOAD] -= load
-        elif mode == MODE_INCREASE:
-            serverDetail[ACTIVE_LOAD] += load
+        if mode == MODE_D:
+            serverDetail[ACL] -= load
+        elif mode == MODE_I:
+            serverDetail[ACL] += load
 
 
-    def _updateAssignedLoad(self, server, mode, load):
+    def _updateASL(self, server, mode, load):
         serverDetail = self.serverDetails[server]
-        if mode == MODE_DECREASE:
-            serverDetail[ASSIGNED_LOAD] -= load
-        elif mode == MODE_INCREASE:
-            serverDetail[ASSIGNED_LOAD] += load
+        if mode == MODE_D:
+            serverDetail[ASL] -= load
+        elif mode == MODE_I:
+            serverDetail[ASL] += load
 
 
-    def _updateNumAssignedJobs(self, server, mode):
+    def _updateNASJ(self, server, mode):
         serverDetail = self.serverDetails[server]
-        prevNumAssignedJobs = serverDetail[NUM_ASSIGNED_JOBS]
-        if mode == MODE_DECREASE:
-            serverDetail[NUM_ASSIGNED_JOBS] -= 1
-        elif mode == MODE_INCREASE:
-            serverDetail[NUM_ASSIGNED_JOBS] += 1
-        return prevNumAssignedJobs
+        prevNASJ = serverDetail[NASJ]
+        if mode == MODE_D:
+            serverDetail[NASJ] -= 1
+        elif mode == MODE_I:
+            serverDetail[NASJ] += 1
+        return prevNASJ
 
 
-    def _updateNumActiveJobs(self, server, mode):
+    def _updateNACJ(self, server, mode):
         serverDetail = self.serverDetails[server]
-        prevNumActiveJobs = serverDetail[NUM_ACTIVE_JOBS]
-        if mode == MODE_DECREASE:
-            serverDetail[NUM_ACTIVE_JOBS] -= 1
-        elif mode == MODE_INCREASE:
-            serverDetail[NUM_ACTIVE_JOBS] += 1
-        return prevNumActiveJobs
+        prevNACJ = serverDetail[NACJ]
+        if mode == MODE_D:
+            serverDetail[NACJ] -= 1
+        elif mode == MODE_I:
+            serverDetail[NACJ] += 1
+        return prevNACJ
 
 
-    def getServer(self, jobName, jobSize):
-        server = self._findServerWithMost(P)
-        self._addJobToServerDetails(server, jobName, jobSize)
-        self._addJobToJobDetails(server, jobName, jobSize)
-        return server
+    def _hasForceFedAll(self):
+        return self.numForceFed == len(self.serverDetails)
+
+
+    def _forceFeed(self):
+        for server in self.serverDetails.keys():
+            if FF in self.serverDetails[server]:
+                self.numForceFed += 1
+                self.serverDetails[server].pop(FF)
+                return server
+        return None
 
 
     def printServerStatus(self):
@@ -204,9 +210,25 @@ class serverQueue:
         self._printJobDetails()
 
 
+    def getServer(self, jobName, jobSize):
+        if self._hasForceFedAll() or self._isUnknownJobSize(jobSize):
+            server = self._findServerWithMost(P)
+        else:
+            server =  self._forceFeed()
+        self._addJobToServerDetails(server, jobName, jobSize)
+        self._addJobToJobDetails(server, jobName, jobSize)
+        return server
+
+
+    def _updateDefaultLoad(self, jobSize):
+        if self._isUnknownJobSize(jobSize):
+            return
+        self.DL = 0.5 * self.DL + 0.5 * float(jobSize)
+
     def removeJob(self, jobName):
         server, jobSize = self._removeJobFromJobDetails(jobName)
         self._removeJobFromServerDetails(server, jobName, jobSize)
+        self._increaseTFL(jobSize)
 
 
 # KeyboardInterrupt handler
